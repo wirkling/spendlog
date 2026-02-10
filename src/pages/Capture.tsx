@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCamera } from '@/hooks/useCamera';
 import { useReceiptStore } from '@/stores/receiptStore';
+import { useCaptureStore } from '@/stores/captureStore';
 import { useOfflineQueue } from '@/hooks/useOfflineQueue';
 import { addToQueue } from '@/lib/offline-queue';
 import { CATEGORY_LIST, DIVERS_SUB_ACCOUNTS, SALON_SUB_TYPES, CATEGORIES } from '@/lib/categories';
@@ -10,16 +11,24 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
-import { Camera, RotateCcw, Check, Upload, X } from 'lucide-react';
+import { Camera, RotateCcw, Check, Upload, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { format } from 'date-fns';
 
 type CaptureStep = 'camera' | 'preview' | 'details';
+
+interface OcrResult {
+  vendor_name?: string | null;
+  date?: string | null;
+  total_ttc?: number | null;
+  tva_amount?: number | null;
+}
 
 export function CapturePage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { videoRef, canvasRef, isStreaming, error: cameraError, startCamera, stopCamera, capturePhoto } = useCamera();
   const { createReceipt, uploadImage } = useReceiptStore();
+  const setShutterCallback = useCaptureStore((s) => s.setShutterCallback);
   const { isOnline, refreshCount } = useOfflineQueue();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -28,6 +37,8 @@ export function CapturePage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [ocrResult, setOcrResult] = useState<OcrResult | null>(null);
+  const [showManual, setShowManual] = useState(false);
 
   // Form state
   const [category, setCategory] = useState<Category>('restaurants_autoroute');
@@ -39,12 +50,7 @@ export function CapturePage() {
   const [diversAccountCode, setDiversAccountCode] = useState('');
   const [salonSubType, setSalonSubType] = useState<SalonSubType>('salons');
 
-  useEffect(() => {
-    startCamera();
-    return () => stopCamera();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleCapture = () => {
+  const handleCapture = useCallback(() => {
     const blob = capturePhoto();
     if (blob) {
       setCapturedBlob(blob);
@@ -52,10 +58,30 @@ export function CapturePage() {
       setStep('preview');
       stopCamera();
     }
-  };
+  }, [capturePhoto, stopCamera]);
+
+  useEffect(() => {
+    startCamera();
+    return () => {
+      stopCamera();
+      setShutterCallback(null);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Register shutter callback when in camera mode
+  useEffect(() => {
+    if (step === 'camera' && isStreaming) {
+      setShutterCallback(handleCapture);
+    } else {
+      setShutterCallback(null);
+    }
+    return () => setShutterCallback(null);
+  }, [step, isStreaming, handleCapture, setShutterCallback]);
 
   const handleRetake = () => {
     setCapturedBlob(null);
+    setOcrResult(null);
+    setShowManual(false);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setStep('camera');
@@ -76,10 +102,15 @@ export function CapturePage() {
 
   const handleUsePhoto = async () => {
     setStep('details');
-
-    if (!capturedBlob || !isOnline) return;
-
     setScanning(true);
+    setOcrResult(null);
+
+    if (!capturedBlob || !isOnline) {
+      setScanning(false);
+      setShowManual(true);
+      return;
+    }
+
     try {
       const base64 = await blobToBase64(capturedBlob);
       const response = await fetch('/.netlify/functions/ocr', {
@@ -93,7 +124,9 @@ export function CapturePage() {
 
       if (response.ok) {
         const data = await response.json();
-        const result = data.result;
+        const result: OcrResult = data.result;
+        setOcrResult(result);
+
         if (result?.total_ttc != null) {
           setAmountTtc(result.total_ttc.toFixed(2).replace('.', ','));
         }
@@ -103,10 +136,11 @@ export function CapturePage() {
         if (result?.date) {
           setReceiptDate(result.date);
         }
-        showToast('Ticket analysé automatiquement', 'success');
+      } else {
+        setShowManual(true);
       }
     } catch {
-      // OCR failed silently — user can still fill in manually
+      setShowManual(true);
     } finally {
       setScanning(false);
     }
@@ -136,7 +170,6 @@ export function CapturePage() {
       const tvaCents = categoryConfig.tracksTva ? parseAmount(amountTva) : null;
 
       if (!isOnline && capturedBlob) {
-        // Offline: queue for later
         const pending: PendingUpload = {
           id: crypto.randomUUID(),
           imageBlob: capturedBlob,
@@ -182,21 +215,18 @@ export function CapturePage() {
 
   const categoryConfig = CATEGORIES[category];
 
-  // Camera view
+  // Camera view — clean, just the viewfinder. Shutter is in the BottomNav.
   if (step === 'camera') {
     return (
-      <div className="relative flex h-screen flex-col bg-black">
+      <div className="flex flex-col items-center justify-center" style={{ height: 'calc(100vh - 5rem)' }}>
         <canvas ref={canvasRef} className="hidden" />
         {cameraError ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center text-white">
-            <Camera size={48} className="opacity-50" />
-            <p className="text-sm opacity-70">{cameraError}</p>
-            <Button onClick={() => fileInputRef.current?.click()} variant="secondary">
-              <Upload size={18} className="mr-2" />
+          <div className="flex flex-col items-center gap-4 px-4 text-center">
+            <Camera size={48} className="text-gray-300" />
+            <p className="text-sm text-gray-500">{cameraError}</p>
+            <Button onClick={() => fileInputRef.current?.click()} variant="secondary" className="gap-2">
+              <Upload size={18} />
               Choisir une photo
-            </Button>
-            <Button onClick={() => { setStep('details'); }} variant="ghost" className="text-white">
-              Saisie manuelle
             </Button>
             <input
               ref={fileInputRef}
@@ -208,43 +238,12 @@ export function CapturePage() {
             />
           </div>
         ) : (
-          <>
-            <video
-              ref={videoRef}
-              className="flex-1 object-cover"
-              playsInline
-              muted
-            />
-            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-6 bg-gradient-to-t from-black/80 to-transparent p-8 pb-safe">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white"
-              >
-                <Upload size={20} />
-              </button>
-              <button
-                onClick={handleCapture}
-                disabled={!isStreaming}
-                className="flex h-18 w-18 items-center justify-center rounded-full border-4 border-white bg-white/30 disabled:opacity-50"
-              >
-                <div className="h-14 w-14 rounded-full bg-white" />
-              </button>
-              <button
-                onClick={() => navigate(-1)}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={handleFileSelect}
-            />
-          </>
+          <video
+            ref={videoRef}
+            className="h-full w-full object-cover"
+            playsInline
+            muted
+          />
         )}
       </div>
     );
@@ -253,50 +252,98 @@ export function CapturePage() {
   // Preview view
   if (step === 'preview') {
     return (
-      <div className="relative flex h-screen flex-col bg-black">
+      <div className="flex flex-col items-center justify-center px-4" style={{ height: 'calc(100vh - 5rem)' }}>
         {previewUrl && (
-          <img src={previewUrl} alt="Preview" className="flex-1 object-contain" />
+          <img src={previewUrl} alt="Preview" className="max-h-[60vh] rounded-xl object-contain shadow-lg" />
         )}
-        <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-6 bg-gradient-to-t from-black/80 to-transparent p-8 pb-safe">
-          <Button onClick={handleRetake} variant="secondary" className="gap-2">
+        <div className="mt-6 flex gap-4">
+          <Button onClick={handleRetake} variant="secondary" className="gap-2" size="lg">
             <RotateCcw size={18} />
             Reprendre
           </Button>
-          <Button onClick={handleUsePhoto} className="gap-2">
+          <Button onClick={handleUsePhoto} className="gap-2" size="lg">
             <Check size={18} />
-            Utiliser
+            Analyser
           </Button>
         </div>
       </div>
     );
   }
 
-  // Details form
+  // Details view — AI-first
   return (
     <div className="px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Détails du ticket</h1>
-        <button onClick={() => navigate(-1)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100">
-          <X size={20} />
-        </button>
-      </div>
-
+      {/* Receipt thumbnail */}
       {previewUrl && (
         <div className="mb-4 overflow-hidden rounded-xl">
-          <img src={previewUrl} alt="Receipt" className="h-40 w-full object-cover" />
+          <img src={previewUrl} alt="Receipt" className="h-32 w-full object-cover" />
         </div>
       )}
 
+      {/* Scanning state */}
       {scanning && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg bg-blue-50 p-3">
-          <div className="animate-spin h-5 w-5 rounded-full border-2 border-blue-600 border-t-transparent" />
-          <span className="text-sm text-blue-700">Analyse du ticket en cours...</span>
+        <div className="mb-6 flex flex-col items-center gap-3 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 p-8">
+          <div className="relative">
+            <Sparkles size={32} className="text-blue-600 animate-pulse" />
+          </div>
+          <p className="text-lg font-semibold text-blue-900">Analyse en cours...</p>
+          <p className="text-sm text-blue-600">Lecture du ticket par IA</p>
+          <div className="mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-blue-200">
+            <div className="h-full w-1/2 animate-[shimmer_1.5s_ease-in-out_infinite] rounded-full bg-blue-500"
+                 style={{ animation: 'shimmer 1.5s ease-in-out infinite', transform: 'translateX(-100%)' }} />
+          </div>
         </div>
       )}
 
-      <div className="space-y-4">
-        {/* Category tiles */}
-        <div>
+      {/* OCR Results card */}
+      {!scanning && ocrResult && (
+        <div className="mb-6 rounded-2xl bg-gradient-to-br from-green-50 to-emerald-50 p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <Sparkles size={20} className="text-green-600" />
+            <h2 className="text-base font-semibold text-green-900">Résultat de l'analyse</h2>
+          </div>
+
+          <div className="space-y-3">
+            {ocrResult.vendor_name && (
+              <div>
+                <p className="text-xs font-medium text-green-600 uppercase">Commerçant</p>
+                <p className="text-lg font-semibold text-gray-900">{ocrResult.vendor_name}</p>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs font-medium text-green-600 uppercase">Montant TTC</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {ocrResult.total_ttc != null ? `${ocrResult.total_ttc.toFixed(2).replace('.', ',')} €` : '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-green-600 uppercase">TVA</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {ocrResult.tva_amount != null ? `${ocrResult.tva_amount.toFixed(2).replace('.', ',')} €` : '—'}
+                </p>
+              </div>
+            </div>
+            {ocrResult.date && (
+              <div>
+                <p className="text-xs font-medium text-green-600 uppercase">Date</p>
+                <p className="text-base font-medium text-gray-900">{ocrResult.date}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* OCR failed state */}
+      {!scanning && !ocrResult && (
+        <div className="mb-6 rounded-2xl bg-amber-50 p-6 text-center">
+          <p className="text-sm text-amber-700">Analyse impossible. Saisissez les informations manuellement.</p>
+        </div>
+      )}
+
+      {/* Category selector — always visible */}
+      {!scanning && (
+        <div className="mb-4">
           <label className="mb-2 block text-sm font-medium text-gray-700">Catégorie</label>
           <div className="grid grid-cols-4 gap-2">
             {CATEGORY_LIST.map((cat) => (
@@ -314,81 +361,100 @@ export function CapturePage() {
             ))}
           </div>
         </div>
+      )}
 
-        <Input
-          label="Date"
-          type="date"
-          value={receiptDate}
-          onChange={(e) => setReceiptDate(e.target.value)}
-        />
+      {/* Manual edit toggle */}
+      {!scanning && ocrResult && (
+        <button
+          onClick={() => setShowManual(!showManual)}
+          className="mb-4 flex w-full items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium text-gray-500 hover:bg-gray-100"
+        >
+          {showManual ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          {showManual ? 'Masquer les détails' : 'Modifier manuellement'}
+        </button>
+      )}
 
-        <Input
-          label="Montant TTC (EUR)"
-          type="text"
-          inputMode="decimal"
-          value={amountTtc}
-          onChange={(e) => setAmountTtc(e.target.value)}
-          placeholder="0,00"
-        />
-
-        {categoryConfig.tracksTva && (
+      {/* Manual form — shown if no OCR result, or user expands */}
+      {!scanning && (showManual || !ocrResult) && (
+        <div className="mb-4 space-y-4">
           <Input
-            label={`TVA${categoryConfig.tvaDeductionRate < 1 ? ` (${categoryConfig.tvaDeductionRate * 100}% déductible)` : ''}`}
+            label="Date"
+            type="date"
+            value={receiptDate}
+            onChange={(e) => setReceiptDate(e.target.value)}
+          />
+
+          <Input
+            label="Montant TTC (EUR)"
             type="text"
             inputMode="decimal"
-            value={amountTva}
-            onChange={(e) => setAmountTva(e.target.value)}
+            value={amountTtc}
+            onChange={(e) => setAmountTtc(e.target.value)}
             placeholder="0,00"
           />
-        )}
 
-        {categoryConfig.hasCompanyName && (
-          <Input
-            label="Nom de l'entreprise"
-            value={companyName}
-            onChange={(e) => setCompanyName(e.target.value)}
-            placeholder="Société invitée"
-          />
-        )}
+          {categoryConfig.tracksTva && (
+            <Input
+              label={`TVA${categoryConfig.tvaDeductionRate < 1 ? ` (${categoryConfig.tvaDeductionRate * 100}% déductible)` : ''}`}
+              type="text"
+              inputMode="decimal"
+              value={amountTva}
+              onChange={(e) => setAmountTva(e.target.value)}
+              placeholder="0,00"
+            />
+          )}
 
-        {categoryConfig.hasDesignation && (
-          <Input
-            label="Désignation"
-            value={designation}
-            onChange={(e) => setDesignation(e.target.value)}
-            placeholder="Description"
-          />
-        )}
+          {categoryConfig.hasCompanyName && (
+            <Input
+              label="Nom de l'entreprise"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="Société invitée"
+            />
+          )}
 
-        {categoryConfig.hasDiversAccountCode && (
-          <Select
-            label="Sous-compte"
-            value={diversAccountCode}
-            onChange={(e) => setDiversAccountCode(e.target.value)}
-            placeholder="Choisir un sous-compte"
-            options={DIVERS_SUB_ACCOUNTS.map((a) => ({
-              value: a.code,
-              label: `${a.code} - ${a.label}`,
-            }))}
-          />
-        )}
+          {categoryConfig.hasDesignation && (
+            <Input
+              label="Désignation"
+              value={designation}
+              onChange={(e) => setDesignation(e.target.value)}
+              placeholder="Description"
+            />
+          )}
 
-        {categoryConfig.hasSalonSubType && (
-          <Select
-            label="Type de salon"
-            value={salonSubType}
-            onChange={(e) => setSalonSubType(e.target.value as SalonSubType)}
-            options={SALON_SUB_TYPES.map((s) => ({
-              value: s.key,
-              label: s.label,
-            }))}
-          />
-        )}
+          {categoryConfig.hasDiversAccountCode && (
+            <Select
+              label="Sous-compte"
+              value={diversAccountCode}
+              onChange={(e) => setDiversAccountCode(e.target.value)}
+              placeholder="Choisir un sous-compte"
+              options={DIVERS_SUB_ACCOUNTS.map((a) => ({
+                value: a.code,
+                label: `${a.code} - ${a.label}`,
+              }))}
+            />
+          )}
 
+          {categoryConfig.hasSalonSubType && (
+            <Select
+              label="Type de salon"
+              value={salonSubType}
+              onChange={(e) => setSalonSubType(e.target.value as SalonSubType)}
+              options={SALON_SUB_TYPES.map((s) => ({
+                value: s.key,
+                label: s.label,
+              }))}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Save button */}
+      {!scanning && (
         <Button onClick={handleSave} loading={saving} className="w-full" size="lg">
           Enregistrer
         </Button>
-      </div>
+      )}
     </div>
   );
 }

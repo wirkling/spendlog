@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Camera, Receipt, FileSpreadsheet } from 'lucide-react';
+import { useCaptureStore } from '@/stores/captureStore';
 
 const navItems = [
   { path: '/', label: 'Accueil', icon: LayoutDashboard },
@@ -11,6 +12,9 @@ const navItems = [
 export function BottomNav() {
   const location = useLocation();
   const navigate = useNavigate();
+  const shutterCallback = useCaptureStore((s) => s.shutterCallback);
+
+  const isOnCapture = location.pathname === '/capture';
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 bg-white pb-safe">
@@ -20,13 +24,28 @@ export function BottomNav() {
           const Icon = item.icon;
 
           if (item.primary) {
+            const isShutter = isOnCapture && shutterCallback;
             return (
               <button
                 key={item.path}
-                onClick={() => navigate(item.path)}
-                className="flex -mt-4 h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg active:bg-blue-700"
+                onClick={() => {
+                  if (isShutter) {
+                    shutterCallback();
+                  } else {
+                    navigate(item.path);
+                  }
+                }}
+                className={`flex -mt-4 items-center justify-center rounded-full shadow-lg active:scale-95 transition-transform
+                  ${isShutter
+                    ? 'h-16 w-16 border-4 border-white bg-red-500'
+                    : 'h-14 w-14 bg-blue-600 text-white'
+                  }`}
               >
-                <Icon size={24} />
+                {isShutter ? (
+                  <div className="h-12 w-12 rounded-full bg-white" />
+                ) : (
+                  <Icon size={24} />
+                )}
               </button>
             );
           }
