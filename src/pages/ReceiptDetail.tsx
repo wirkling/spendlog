@@ -21,6 +21,8 @@ export function ReceiptDetailPage() {
   const [saving, setSaving] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
 
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+
   // Form fields
   const [amountTtc, setAmountTtc] = useState('');
   const [amountTva, setAmountTva] = useState('');
@@ -55,6 +57,12 @@ export function ReceiptDetailPage() {
       setDesignation(data.designation || '');
       setDiversAccountCode(data.divers_account_code || '');
       setSalonSubType(data.salon_sub_type || 'salons');
+
+      if (data.image_path) {
+        const url = await getImageUrl(data.image_path);
+        setImageUrl(url);
+      }
+
       setLoading(false);
     })();
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -131,8 +139,6 @@ export function ReceiptDetailPage() {
       setReanalyzing(false);
     }
   };
-
-  const imageUrl = receipt.image_path ? getImageUrl(receipt.image_path) : null;
 
   return (
     <div className="px-4 py-6">

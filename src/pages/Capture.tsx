@@ -49,6 +49,7 @@ export function CapturePage() {
   const [designation, setDesignation] = useState('');
   const [diversAccountCode, setDiversAccountCode] = useState('');
   const [salonSubType, setSalonSubType] = useState<SalonSubType>('salons');
+  const [vendorName, setVendorName] = useState('');
 
   const handleCapture = useCallback(() => {
     const blob = capturePhoto();
@@ -82,6 +83,7 @@ export function CapturePage() {
     setCapturedBlob(null);
     setOcrResult(null);
     setShowManual(false);
+    setVendorName('');
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setStep('camera');
@@ -127,6 +129,9 @@ export function CapturePage() {
         const result: OcrResult = data.result;
         setOcrResult(result);
 
+        if (result?.vendor_name) {
+          setVendorName(result.vendor_name);
+        }
         if (result?.total_ttc != null) {
           setAmountTtc(result.total_ttc.toFixed(2).replace('.', ','));
         }
@@ -304,12 +309,16 @@ export function CapturePage() {
           </div>
 
           <div className="space-y-3">
-            {ocrResult.vendor_name && (
-              <div>
-                <p className="text-xs font-medium text-green-600 uppercase">Commerçant</p>
-                <p className="text-lg font-semibold text-gray-900">{ocrResult.vendor_name}</p>
-              </div>
-            )}
+            <div>
+              <p className="text-xs font-medium text-green-600 uppercase">Commerçant</p>
+              <input
+                type="text"
+                value={vendorName}
+                onChange={(e) => setVendorName(e.target.value)}
+                className="mt-1 w-full border-b border-green-200 bg-transparent text-lg font-semibold text-gray-900 outline-none focus:border-green-500 placeholder:text-gray-400"
+                placeholder="Nom du commerçant"
+              />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-xs font-medium text-green-600 uppercase">Montant TTC</p>

@@ -31,7 +31,7 @@ interface ReceiptState {
   updateReceipt: (id: string, data: Partial<CreateReceiptData & { is_verified: boolean }>) => Promise<void>;
   deleteReceipt: (id: string) => Promise<void>;
   uploadImage: (file: Blob, fileName: string) => Promise<string>;
-  getImageUrl: (path: string) => string;
+  getImageUrl: (path: string) => Promise<string | null>;
 }
 
 export const useReceiptStore = create<ReceiptState>((set, get) => ({
@@ -149,10 +149,11 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
     return path;
   },
 
-  getImageUrl: (path: string) => {
-    const { data } = supabase.storage
+  getImageUrl: async (path: string) => {
+    const { data, error } = await supabase.storage
       .from('receipt-images')
-      .getPublicUrl(path);
-    return data.publicUrl;
+      .createSignedUrl(path, 3600); // 1 hour expiry
+    if (error || !data?.signedUrl) return null;
+    return data.signedUrl;
   },
 }));
