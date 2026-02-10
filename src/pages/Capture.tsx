@@ -27,6 +27,7 @@ export function CapturePage() {
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   // Form state
   const [category, setCategory] = useState<Category>('restaurants_autoroute');
@@ -61,8 +62,54 @@ export function CapturePage() {
     startCamera();
   };
 
-  const handleUsePhoto = () => {
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        resolve(dataUrl.split(',')[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const handleUsePhoto = async () => {
     setStep('details');
+
+    if (!capturedBlob || !isOnline) return;
+
+    setScanning(true);
+    try {
+      const base64 = await blobToBase64(capturedBlob);
+      const response = await fetch('/.netlify/functions/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_base64: base64,
+          media_type: capturedBlob.type || 'image/jpeg',
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const result = data.result;
+        if (result?.total_ttc != null) {
+          setAmountTtc(result.total_ttc.toFixed(2).replace('.', ','));
+        }
+        if (result?.tva_amount != null) {
+          setAmountTva(result.tva_amount.toFixed(2).replace('.', ','));
+        }
+        if (result?.date) {
+          setReceiptDate(result.date);
+        }
+        showToast('Ticket analysé automatiquement', 'success');
+      }
+    } catch {
+      // OCR failed silently — user can still fill in manually
+    } finally {
+      setScanning(false);
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -237,6 +284,13 @@ export function CapturePage() {
       {previewUrl && (
         <div className="mb-4 overflow-hidden rounded-xl">
           <img src={previewUrl} alt="Receipt" className="h-40 w-full object-cover" />
+        </div>
+      )}
+
+      {scanning && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg bg-blue-50 p-3">
+          <div className="animate-spin h-5 w-5 rounded-full border-2 border-blue-600 border-t-transparent" />
+          <span className="text-sm text-blue-700">Analyse du ticket en cours...</span>
         </div>
       )}
 

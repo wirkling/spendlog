@@ -15,6 +15,69 @@ const bedrockClient = new BedrockRuntimeClient({
   },
 });
 
+const OCR_PROMPT = `Extract the following information from this receipt image:
+1. Vendor/store name
+2. Date (format: YYYY-MM-DD)
+3. Total amount TTC in EUR (use period as decimal separator)
+4. TVA (VAT) amount in EUR (use period as decimal separator)
+
+Important:
+- Receipts may use comma as decimal separator - convert to period
+- Look for "TTC", "TOTAL", "NET A PAYER", "Summe", "Total" for total amount
+- Look for "TVA", "T.V.A.", "MwSt" for VAT amount
+- Currency is EUR
+
+Return a JSON object with exactly these keys:
+{
+  "vendor_name": "string or null",
+  "date": "YYYY-MM-DD or null",
+  "total_ttc": number_or_null,
+  "tva_amount": number_or_null
+}
+
+Return ONLY the JSON, no other text.`;
+
+async function callBedrock(base64Image: string, mediaType: string): Promise<Record<string, unknown>> {
+  const bedrockPayload = {
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: 500,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mediaType, data: base64Image },
+          },
+          { type: 'text', text: OCR_PROMPT },
+        ],
+      },
+    ],
+  };
+
+  const command = new InvokeModelCommand({
+    modelId: 'anthropic.claude-3-haiku-20240307-v1:0',
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: JSON.stringify(bedrockPayload),
+  });
+
+  const response = await bedrockClient.send(command);
+  const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+  const assistantText = responseBody.content?.[0]?.text || '';
+
+  const jsonMatch = assistantText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error('Could not parse JSON from Bedrock response');
+  }
+
+  return JSON.parse(jsonMatch[0]);
+}
+
+async function scanImage(base64Image: string, mediaType: string): Promise<Record<string, unknown>> {
+  return callBedrock(base64Image, mediaType);
+}
+
 async function processReceipt(receiptId: string): Promise<Record<string, unknown>> {
   // Fetch receipt
   const { data: receipt, error: receiptError } = await supabase
@@ -58,71 +121,7 @@ async function processReceipt(receiptId: string): Promise<Record<string, unknown
   };
   const mediaType = mediaTypeMap[ext || 'jpg'] || 'image/jpeg';
 
-  // Call Bedrock with Claude Haiku
-  const prompt = `Extract the following information from this French receipt image:
-1. Vendor/store name
-2. Date (format: YYYY-MM-DD)
-3. Total amount TTC in EUR (use period as decimal separator)
-4. TVA (VAT) amount in EUR (use period as decimal separator)
-
-Important:
-- French receipts use comma as decimal separator - convert to period
-- Look for "TTC", "TOTAL", "NET A PAYER" for total amount
-- Look for "TVA", "T.V.A." for VAT amount
-- Currency is EUR
-
-Return a JSON object with exactly these keys:
-{
-  "vendor_name": "string or null",
-  "date": "YYYY-MM-DD or null",
-  "total_ttc": number_or_null,
-  "tva_amount": number_or_null
-}
-
-Return ONLY the JSON, no other text.`;
-
-  const bedrockPayload = {
-    anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: mediaType,
-              data: base64Image,
-            },
-          },
-          {
-            type: 'text',
-            text: prompt,
-          },
-        ],
-      },
-    ],
-  };
-
-  const command = new InvokeModelCommand({
-    modelId: 'anthropic.claude-3-haiku-20240307-v1:0',
-    contentType: 'application/json',
-    accept: 'application/json',
-    body: JSON.stringify(bedrockPayload),
-  });
-
-  const response = await bedrockClient.send(command);
-  const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-  const assistantText = responseBody.content?.[0]?.text || '';
-
-  // Parse JSON from response
-  const jsonMatch = assistantText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error('Could not parse JSON from Bedrock response');
-  }
-
-  const ocrResult = JSON.parse(jsonMatch[0]);
+  const ocrResult = await callBedrock(base64Image, mediaType);
 
   // Update scan job
   const { data: scanJob } = await supabase
@@ -166,6 +165,16 @@ const handler: Handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body || '{}');
+
+    // Mode 0: Scan an image directly (returns OCR result without saving)
+    if (body.image_base64) {
+      const mediaType = body.media_type || 'image/jpeg';
+      const result = await scanImage(body.image_base64, mediaType);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ success: true, result }),
+      };
+    }
 
     // Mode 1: Process a single receipt by ID
     if (body.receipt_id) {
