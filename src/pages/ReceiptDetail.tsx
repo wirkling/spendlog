@@ -118,7 +118,7 @@ export function ReceiptDetailPage() {
   const handleReanalyze = async () => {
     setReanalyzing(true);
     try {
-      const response = await fetch('/.netlify/functions/ocr-enhance', {
+      const response = await fetch('/.netlify/functions/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receipt_id: receipt.id }),

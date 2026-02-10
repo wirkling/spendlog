@@ -95,7 +95,7 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
 
     if (error) throw error;
 
-    // Create scan job if image was uploaded
+    // Create scan job and trigger OCR if image was uploaded
     if (data.image_path) {
       await supabase.from('scan_jobs').insert({
         receipt_id: receipt.id,
@@ -103,6 +103,13 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
         image_path: data.image_path,
         status: 'queued',
       });
+
+      // Fire-and-forget OCR call to Netlify Function
+      fetch('/.netlify/functions/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receipt_id: receipt.id }),
+      }).catch(() => {}); // Non-blocking; realtime subscription will pick up the result
     }
 
     await get().fetchReceipts();

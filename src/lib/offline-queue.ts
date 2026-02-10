@@ -75,6 +75,13 @@ async function processUpload(upload: PendingUpload): Promise<boolean> {
       status: 'queued',
     });
 
+    // Trigger OCR via Netlify Function
+    fetch('/.netlify/functions/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ receipt_id: receipt.id }),
+    }).catch(() => {});
+
     await removeFromQueue(upload.id);
     return true;
   } catch (err) {
