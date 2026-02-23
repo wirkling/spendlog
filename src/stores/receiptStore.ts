@@ -51,6 +51,14 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
 
   fetchReceipts: async () => {
     set({ loading: true });
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      console.warn('[fetchReceipts] No authenticated user');
+      set({ loading: false });
+      return;
+    }
+
     const { selectedMonth } = get();
     const monthStart = format(startOfMonth(selectedMonth), 'yyyy-MM-dd');
     const monthEnd = format(endOfMonth(selectedMonth), 'yyyy-MM-dd');
@@ -58,6 +66,7 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
     let query = supabase
       .from('receipts')
       .select('*')
+      .eq('user_id', user.id)
       .gte('receipt_date', monthStart)
       .lte('receipt_date', monthEnd)
       .order('receipt_date', { ascending: true })
@@ -71,10 +80,12 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
     const { data, error } = await query;
 
     if (error) {
-      console.error('Failed to fetch receipts:', error);
+      console.error('[fetchReceipts] Query failed:', error);
       set({ loading: false });
       return;
     }
+
+    console.log('[fetchReceipts]', { userId: user.id, monthStart, monthEnd, count: data?.length });
 
     set({ receipts: data ?? [], loading: false });
   },
