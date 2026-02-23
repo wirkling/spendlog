@@ -34,6 +34,8 @@ interface ReceiptState {
   getImageUrl: (path: string) => Promise<string | null>;
 }
 
+let fetchInFlight: Promise<void> | null = null;
+
 export const useReceiptStore = create<ReceiptState>((set, get) => ({
   receipts: [],
   selectedMonth: startOfMonth(new Date()),
@@ -50,44 +52,48 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
   },
 
   fetchReceipts: async () => {
-    set({ loading: true });
+    if (fetchInFlight) return fetchInFlight;
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      console.warn('[fetchReceipts] No authenticated user');
-      set({ loading: false });
-      return;
-    }
+    const doFetch = async () => {
+      set({ loading: true });
 
-    const { selectedMonth } = get();
-    const monthStart = format(startOfMonth(selectedMonth), 'yyyy-MM-dd');
-    const monthEnd = format(endOfMonth(selectedMonth), 'yyyy-MM-dd');
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        set({ loading: false });
+        return;
+      }
 
-    let query = supabase
-      .from('receipts')
-      .select('*')
-      .eq('user_id', user.id)
-      .gte('receipt_date', monthStart)
-      .lte('receipt_date', monthEnd)
-      .order('receipt_date', { ascending: true })
-      .order('created_at', { ascending: true });
+      const { selectedMonth } = get();
+      const monthStart = format(startOfMonth(selectedMonth), 'yyyy-MM-dd');
+      const monthEnd = format(endOfMonth(selectedMonth), 'yyyy-MM-dd');
 
-    const { filters } = get();
-    if (filters.category) {
-      query = query.eq('category', filters.category);
-    }
+      let query = supabase
+        .from('receipts')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('receipt_date', monthStart)
+        .lte('receipt_date', monthEnd)
+        .order('receipt_date', { ascending: true })
+        .order('created_at', { ascending: true });
 
-    const { data, error } = await query;
+      const { filters } = get();
+      if (filters.category) {
+        query = query.eq('category', filters.category);
+      }
 
-    if (error) {
-      console.error('[fetchReceipts] Query failed:', error);
-      set({ loading: false });
-      return;
-    }
+      const { data, error } = await query;
 
-    console.log('[fetchReceipts]', { userId: user.id, monthStart, monthEnd, count: data?.length });
+      if (error) {
+        console.error('[fetchReceipts] Query failed:', error);
+        set({ loading: false });
+        return;
+      }
 
-    set({ receipts: data ?? [], loading: false });
+      set({ receipts: data ?? [], loading: false });
+    };
+
+    fetchInFlight = doFetch().finally(() => { fetchInFlight = null; });
+    return fetchInFlight;
   },
 
   createReceipt: async (data: CreateReceiptData) => {

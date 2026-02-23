@@ -41,7 +41,6 @@ export function ReceiptListPage() {
     } else {
       setSearchParams({});
     }
-    fetchReceipts();
   };
 
   const filteredReceipts = filters.category
