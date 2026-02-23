@@ -3,7 +3,6 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { BottomNav } from './BottomNav';
 import { useOfflineQueue } from '@/hooks/useOfflineQueue';
 import { useAuthStore } from '@/stores/authStore';
-import { useRealtimeScanJob } from '@/hooks/useRealtimeScanJob';
 import { WifiOff } from 'lucide-react';
 
 export function AppShell() {
@@ -20,8 +19,6 @@ export function AppShell() {
       navigate('/login');
     }
   }, [user, loading, navigate]);
-
-  useRealtimeScanJob();
 
   if (loading) {
     return (
